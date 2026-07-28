@@ -1,0 +1,57 @@
+###############################################################################
+# Production Overrides — RAG Service
+###############################################################################
+
+replicaCount: 3
+
+image:
+  # Set by deploy.sh: --set image.repository=<ECR_URL>
+  repository: ""
+  tag: ""  # Set by deploy.sh: --set image.tag=sha-<commit>
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: rag-service
+  annotations:
+    # Set by deploy.sh: --set serviceAccount.annotations...
+    eks.amazonaws.com/role-arn: ""
+
+service:
+  type: ClusterIP
+  port: 8002
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+env:
+  # Set by deploy.sh: --set env.PGHOST=<RDS_ENDPOINT>
+  PGHOST: ""
+  PGPORT: "5432"
+  PGUSER: "rag_service"
+  PGPASSWORD: ""  # Use ExternalSecret or sealed-secret in production
+  PGDATABASE: "ragdb"
+  EMBEDDING_SERVICE_URL: "http://embedding-service:8001"
+
+nodeSelector:
+  karpenter.sh/nodepool: cpu-workloads
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app: rag-service
+          topologyKey: topology.kubernetes.io/zone

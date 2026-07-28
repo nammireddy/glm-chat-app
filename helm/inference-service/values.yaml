@@ -1,0 +1,71 @@
+replicaCount: 1
+
+image:
+  repository: <account-id>.dkr.ecr.us-east-1.amazonaws.com/inference-service
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+  requests:
+    nvidia.com/gpu: 1
+
+nodeAffinity:
+  workloadLabel: inference
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+terminationGracePeriodSeconds: 100
+
+vllm:
+  gracefulShutdownTimeout: "90"
+  modelName: "THUDM/glm-4-9b-chat"
+  servedModelName: "glm-4-9b-chat"
+  dtype: "float16"
+  maxModelLen: 8192
+  port: 8000
+
+efs:
+  mountPath: /mnt/efs/models
+
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 20
+  metrics:
+    gpuUtilization:
+      name: dcgm_fi_dev_gpu_util
+      averageValue: "70"
+  scaleUp:
+    stabilizationWindowSeconds: 60
+    maxPods: 4
+    periodSeconds: 60
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    maxPods: 1
+    periodSeconds: 60
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: inference-service
+  annotations: {}
+
+prometheus:
+  scrape: "true"
+  port: "8000"
+  path: "/metrics"

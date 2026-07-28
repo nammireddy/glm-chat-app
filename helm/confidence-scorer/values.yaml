@@ -1,0 +1,50 @@
+replicaCount: 2
+
+image:
+  repository: ""  # Set to ECR repository URI
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8003
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "4Gi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8003
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8003
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+
+nodeSelector:
+  karpenter.sh/nodepool: cpu-workloads
+
+tolerations: []
+
+circuitBreaker:
+  enabled: true
+  annotation: "chat-service/circuit-breaker: confidence-scorer"

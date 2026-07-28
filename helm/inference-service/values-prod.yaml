@@ -1,0 +1,74 @@
+###############################################################################
+# Production Overrides — Inference Service
+###############################################################################
+
+replicaCount: 2
+
+image:
+  # Set by deploy.sh: --set image.repository=<ECR_URL>
+  repository: ""
+  tag: ""  # Set by deploy.sh: --set image.tag=sha-<commit>
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: inference-service
+  annotations:
+    # Set by deploy.sh: --set serviceAccount.annotations...
+    eks.amazonaws.com/role-arn: ""
+
+vllm:
+  gracefulShutdownTimeout: "90"
+  modelName: "THUDM/glm-4-9b-chat"
+  servedModelName: "glm-4-9b-chat"
+  dtype: "float16"
+  maxModelLen: 8192
+  port: 8000
+
+efs:
+  mountPath: /mnt/efs/models
+  # Set by deploy.sh
+  fileSystemId: ""
+  accessPointId: ""
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+  requests:
+    nvidia.com/gpu: 1
+
+nodeAffinity:
+  workloadLabel: inference
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+terminationGracePeriodSeconds: 100
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    gpuUtilization:
+      name: dcgm_fi_dev_gpu_util
+      averageValue: "70"
+  scaleUp:
+    stabilizationWindowSeconds: 60
+    maxPods: 4
+    periodSeconds: 60
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    maxPods: 1
+    periodSeconds: 60
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+prometheus:
+  scrape: "true"
+  port: "8000"
+  path: "/metrics"

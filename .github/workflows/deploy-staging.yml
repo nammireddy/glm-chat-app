@@ -1,0 +1,186 @@
+name: Deploy to Staging
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Docker Images"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: ${{ secrets.STAGING_EKS_CLUSTER_NAME }}
+  NAMESPACE: staging
+  IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+
+jobs:
+  deploy:
+    name: "Deploy to Staging"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for staging EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ env.EKS_CLUSTER_NAME }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Deploy inference-service
+        run: |
+          helm upgrade --install inference-service helm/inference-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/inference-service" \
+            -f helm/inference-service/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+      - name: Deploy embedding-service
+        run: |
+          helm upgrade --install embedding-service helm/embedding-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/embedding-service" \
+            -f helm/embedding-service/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+      - name: Deploy rag-service
+        run: |
+          helm upgrade --install rag-service helm/rag-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/rag-service" \
+            -f helm/rag-service/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+      - name: Deploy confidence-scorer
+        run: |
+          helm upgrade --install confidence-scorer helm/confidence-scorer \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/confidence-scorer" \
+            -f helm/confidence-scorer/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+      - name: Deploy chat-service
+        run: |
+          helm upgrade --install chat-service helm/chat-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/chat-service" \
+            -f helm/chat-service/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+      - name: Deploy frontend
+        run: |
+          helm upgrade --install frontend helm/frontend \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/frontend" \
+            -f helm/frontend/values-staging.yaml \
+            --atomic \
+            --timeout 5m
+
+  smoke-tests:
+    name: "Smoke Tests"
+    runs-on: ubuntu-latest
+    needs: deploy
+    env:
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+
+    steps:
+      - name: Wait for services to stabilize
+        run: sleep 30
+
+      - name: Health check — chat-service
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.STAGING_BASE_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::chat-service /health returned $STATUS"
+            exit 1
+          fi
+          echo "✓ chat-service /health → 200"
+
+      - name: Readiness check — chat-service
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.STAGING_BASE_URL }}/ready")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::chat-service /ready returned $STATUS"
+            exit 1
+          fi
+          echo "✓ chat-service /ready → 200"
+
+      - name: Health check — inference-service
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.STAGING_INFERENCE_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::inference-service /health returned $STATUS"
+            exit 1
+          fi
+          echo "✓ inference-service /health → 200"
+
+      - name: Health check — rag-service
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.STAGING_RAG_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::rag-service /health returned $STATUS"
+            exit 1
+          fi
+          echo "✓ rag-service /health → 200"
+
+      - name: Health check — embedding-service
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.STAGING_EMBEDDING_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::embedding-service /health returned $STATUS"
+            exit 1
+          fi
+          echo "✓ embedding-service /health → 200"
+
+      - name: Health check — confidence-scorer
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.STAGING_SCORER_URL }}/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::confidence-scorer /health returned $STATUS"
+            exit 1
+          fi
+          echo "✓ confidence-scorer /health → 200"
+
+      - name: Smoke test — send chat message and assert SSE [DONE]
+        run: |
+          RESPONSE=$(curl -s -N --max-time 60 \
+            -X POST "${{ env.STAGING_BASE_URL }}/chat" \
+            -H "Content-Type: application/json" \
+            -d '{"session_id":"smoke-test-session","message":"Hello, this is a smoke test."}')
+
+          if echo "$RESPONSE" | grep -q "data: \[DONE\]"; then
+            echo "✓ Chat smoke test passed — received data: [DONE]"
+          else
+            echo "::error::Chat smoke test failed — did not receive data: [DONE]"
+            echo "Response (first 500 chars): ${RESPONSE:0:500}"
+            exit 1
+          fi

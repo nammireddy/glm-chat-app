@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+spec:
+  selector:
+    matchLabels:
+      app: dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app: dcgm-exporter
+        workload: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9400"
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector:
+        workload: inference
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: dcgm-exporter
+          image: nvidia/dcgm-exporter:3.3.5-3.4.1-ubuntu22.04
+          ports:
+            - name: metrics
+              containerPort: 9400
+              protocol: TCP
+          env:
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-nvidia
+              mountPath: /dev/nvidia0
+            - name: device-nvidiactl
+              mountPath: /dev/nvidiactl
+            - name: lib-nvidia
+              mountPath: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+      volumes:
+        - name: device-nvidia
+          hostPath:
+            path: /dev/nvidia0
+        - name: device-nvidiactl
+          hostPath:
+            path: /dev/nvidiactl
+        - name: lib-nvidia
+          hostPath:
+            path: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9400"
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9400
+      targetPort: 9400
+      protocol: TCP
+  selector:
+    app: dcgm-exporter

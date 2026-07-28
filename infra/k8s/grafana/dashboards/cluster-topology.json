@@ -1,0 +1,133 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Karpenter Node Inventory",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "count(kube_node_info)",
+          "legendFormat": "Total Nodes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Spot vs On-Demand Nodes",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "count(kube_node_labels{label_karpenter_sh_capacity_type=\"spot\"})",
+          "legendFormat": "Spot"
+        },
+        {
+          "expr": "count(kube_node_labels{label_karpenter_sh_capacity_type=\"on-demand\"})",
+          "legendFormat": "On-Demand"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "hideFrom": { "tooltip": false, "viz": false, "legend": false } }
+        }
+      }
+    },
+    {
+      "title": "GPU Nodes by Instance Type",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "count(kube_node_labels{label_node_kubernetes_io_instance_type=~\"g6e.*|g7e.*\"}) by (label_node_kubernetes_io_instance_type)",
+          "legendFormat": "{{ label_node_kubernetes_io_instance_type }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Node CPU Utilisation by Node Group",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "avg(rate(node_cpu_seconds_total{mode!=\"idle\"}[5m])) by (node) * 100",
+          "legendFormat": "{{ node }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Estimated Hourly Cost (Spot vs On-Demand)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "count(kube_node_labels{label_karpenter_sh_capacity_type=\"spot\", label_node_kubernetes_io_instance_type=~\"g6e.*|g7e.*\"}) * 1.5",
+          "legendFormat": "Spot GPU Cost (est $/hr)"
+        },
+        {
+          "expr": "count(kube_node_labels{label_karpenter_sh_capacity_type=\"on-demand\", label_node_kubernetes_io_instance_type=~\"g6e.*|g7e.*\"}) * 4.5",
+          "legendFormat": "On-Demand GPU Cost (est $/hr)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 30 }
+        }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["glm-chat", "cluster", "karpenter"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Cluster Topology",
+  "uid": "glm-cluster-topology"
+}

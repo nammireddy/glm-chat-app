@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inference-service.fullname" . }}
+  labels:
+    app: {{ include "inference-service.name" . }}
+    workload: inference
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "inference-service.name" . }}
+      workload: inference
+  template:
+    metadata:
+      labels:
+        app: {{ include "inference-service.name" . }}
+        workload: inference
+      annotations:
+        prometheus.io/scrape: {{ .Values.prometheus.scrape | quote }}
+        prometheus.io/port: {{ .Values.prometheus.port | quote }}
+        prometheus.io/path: {{ .Values.prometheus.path | quote }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values:
+                      - {{ .Values.nodeAffinity.workloadLabel }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      containers:
+        - name: vllm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.vllm.port }}
+              protocol: TCP
+          env:
+            - name: MODEL_NAME
+              value: {{ .Values.vllm.modelName | quote }}
+            - name: VLLM_GRACEFUL_SHUTDOWN_TIMEOUT
+              value: {{ .Values.vllm.gracefulShutdownTimeout | quote }}
+          resources:
+            limits:
+              nvidia.com/gpu: {{ index .Values.resources.limits "nvidia.com/gpu" }}
+            requests:
+              nvidia.com/gpu: {{ index .Values.resources.requests "nvidia.com/gpu" }}
+          volumeMounts:
+            - name: efs-models
+              mountPath: {{ .Values.efs.mountPath }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "kill -SIGTERM 1; sleep 90"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: efs-models
+          persistentVolumeClaim:
+            claimName: {{ include "inference-service.fullname" . }}-efs

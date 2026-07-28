@@ -1,0 +1,33 @@
+# prometheus-adapter Helm chart values
+# Exposes dcgm_fi_dev_gpu_util as an external metric for the inference HPA
+
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc
+  port: 9090
+
+rules:
+  external:
+    - seriesQuery: 'dcgm_fi_dev_gpu_util{workload="inference"}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^(.*)$"
+        as: "dcgm_fi_dev_gpu_util"
+      metricsQuery: 'avg(dcgm_fi_dev_gpu_util{workload="inference",<<.LabelMatchers>>}) by (pod)'
+
+replicas: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector:
+  eks.amazonaws.com/nodegroup: system-od

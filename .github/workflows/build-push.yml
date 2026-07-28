@@ -1,0 +1,103 @@
+name: Build & Push Docker Images
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+
+jobs:
+  build-and-push:
+    name: "Build & Push — ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        service:
+          - chat-service
+          - inference-service
+          - rag-service
+          - embedding-service
+          - confidence-scorer
+          - frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Determine build context
+        id: context
+        run: |
+          if [ "${{ matrix.service }}" = "frontend" ]; then
+            echo "path=frontend" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=services/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.context.outputs.path }}
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.ECR_REGISTRY }}/${{ matrix.service }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Start ECR image scan
+        id: scan
+        run: |
+          aws ecr start-image-scan \
+            --repository-name "${{ matrix.service }}" \
+            --image-id imageTag="${{ github.sha }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Wait for scan to complete
+        run: |
+          aws ecr wait image-scan-complete \
+            --repository-name "${{ matrix.service }}" \
+            --image-id imageTag="${{ github.sha }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Check scan findings for critical CVEs
+        run: |
+          CRITICAL_COUNT=$(aws ecr describe-image-scan-findings \
+            --repository-name "${{ matrix.service }}" \
+            --image-id imageTag="${{ github.sha }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query 'imageScanFindings.findingSeverityCounts.CRITICAL' \
+            --output text 2>/dev/null || echo "0")
+
+          if [ "$CRITICAL_COUNT" != "None" ] && [ "$CRITICAL_COUNT" != "0" ] && [ -n "$CRITICAL_COUNT" ]; then
+            echo "::error::Found $CRITICAL_COUNT critical CVE(s) in ${{ matrix.service }} image"
+            aws ecr describe-image-scan-findings \
+              --repository-name "${{ matrix.service }}" \
+              --image-id imageTag="${{ github.sha }}" \
+              --region "${{ env.AWS_REGION }}" \
+              --query 'imageScanFindings.findings[?severity==`CRITICAL`].[name,description]' \
+              --output table
+            exit 1
+          fi
+
+          echo "✓ No critical CVEs found in ${{ matrix.service }}"

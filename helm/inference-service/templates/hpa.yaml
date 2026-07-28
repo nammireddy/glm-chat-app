@@ -1,0 +1,40 @@
+{{- if .Values.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "inference-service.fullname" . }}
+  labels:
+    app: {{ include "inference-service.name" . }}
+    workload: inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "inference-service.fullname" . }}
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: {{ .Values.hpa.metrics.gpuUtilization.name }}
+          selector:
+            matchLabels:
+              workload: inference
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.hpa.metrics.gpuUtilization.averageValue | quote }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.hpa.scaleUp.stabilizationWindowSeconds }}
+      policies:
+        - type: Pods
+          value: {{ .Values.hpa.scaleUp.maxPods }}
+          periodSeconds: {{ .Values.hpa.scaleUp.periodSeconds }}
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.hpa.scaleDown.stabilizationWindowSeconds }}
+      policies:
+        - type: Pods
+          value: {{ .Values.hpa.scaleDown.maxPods }}
+          periodSeconds: {{ .Values.hpa.scaleDown.periodSeconds }}
+{{- end }}

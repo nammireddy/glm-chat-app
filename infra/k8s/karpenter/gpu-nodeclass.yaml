@@ -1,0 +1,21 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu-nodes
+spec:
+  amiFamily: AL2023
+  role: KarpenterNodeRole-glm-chat
+  subnetSelectorTerms:
+  - tags:
+      karpenter.sh/discovery: glm-chat
+  securityGroupSelectorTerms:
+  - tags:
+      karpenter.sh/discovery: glm-chat-gpu
+  blockDeviceMappings:
+  - deviceName: /dev/xvda
+    ebs:
+      volumeSize: 200Gi
+      volumeType: gp3
+  userData: |
+    #!/bin/bash
+    # NVIDIA driver + container toolkit bootstrap handled by AL2023 GPU AMI

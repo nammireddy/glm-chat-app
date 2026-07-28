@@ -1,0 +1,79 @@
+###############################################################################
+# Production Overrides — Chat Service
+###############################################################################
+
+replicaCount: 3
+
+image:
+  # Set by deploy.sh: --set image.repository=<ECR_URL>
+  repository: ""
+  tag: ""  # Set by deploy.sh: --set image.tag=sha-<commit>
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: chat-service
+  annotations:
+    # Set by deploy.sh: --set serviceAccount.annotations...
+    eks.amazonaws.com/role-arn: ""
+
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    alb.ingress.kubernetes.io/actions.redirect-http: '{"type":"redirect","redirectConfig":{"protocol":"HTTPS","statusCode":"HTTP_301"}}'
+  # Set by deploy.sh
+  certificateArn: ""
+  host: ""
+
+probes:
+  readiness:
+    path: /ready
+    port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  liveness:
+    path: /health
+    port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+nodeSelector:
+  karpenter.sh/nodepool: cpu-workloads
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app: chat-service
+          topologyKey: topology.kubernetes.io/zone

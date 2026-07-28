@@ -1,0 +1,4 @@
+project            = "glm-chat"
+region             = "us-east-1"
+domain_name        = "chat.yourdomain.com"
+route53_zone_name  = "yourdomain.com"

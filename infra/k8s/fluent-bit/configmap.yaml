@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: logging
+  labels:
+    app: fluent-bit
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Log_Level     info
+        Daemon        off
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+
+    [INPUT]
+        Name              tail
+        Tag               kube.*
+        Path              /var/log/containers/*.log
+        Parser            docker
+        DB                /var/log/flb_kube.db
+        Mem_Buf_Limit     5MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     kube.var.log.containers.
+        Merge_Log           On
+        Keep_Log            Off
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude On
+
+    # Remove sensitive fields: message_content and user_message
+    [FILTER]
+        Name          modify
+        Match         kube.*
+        Remove        message_content
+        Remove        user_message
+
+    # Route chat-service logs
+    [FILTER]
+        Name          rewrite_tag
+        Match         kube.*
+        Rule          $kubernetes['labels']['app'] ^(chat-service)$ chat-service false
+
+    # Route inference-service logs
+    [FILTER]
+        Name          rewrite_tag
+        Match         kube.*
+        Rule          $kubernetes['labels']['app'] ^(vllm-inference|inference-service)$ inference-service false
+
+    # Route rag-service logs
+    [FILTER]
+        Name          rewrite_tag
+        Match         kube.*
+        Rule          $kubernetes['labels']['app'] ^(rag-service)$ rag-service false
+
+    # Output: Chat Service logs to CloudWatch
+    [OUTPUT]
+        Name                cloudwatch_logs
+        Match               chat-service
+        region              us-east-1
+        log_group_name      /glm-chat/chat-service
+        log_stream_prefix   pod-
+        auto_create_group   true
+        log_retention_days  30
+        extra_user_agent    fluent-bit-glm-chat
+
+    # Output: Inference Service logs to CloudWatch
+    [OUTPUT]
+        Name                cloudwatch_logs
+        Match               inference-service
+        region              us-east-1
+        log_group_name      /glm-chat/inference-service
+        log_stream_prefix   pod-
+        auto_create_group   true
+        log_retention_days  30
+        extra_user_agent    fluent-bit-glm-chat
+
+    # Output: RAG Service logs to CloudWatch
+    [OUTPUT]
+        Name                cloudwatch_logs
+        Match               rag-service
+        region              us-east-1
+        log_group_name      /glm-chat/rag-service
+        log_stream_prefix   pod-
+        auto_create_group   true
+        log_retention_days  30
+        extra_user_agent    fluent-bit-glm-chat
+
+  parsers.conf: |
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    timestamp
+        Time_Format %Y-%m-%dT%H:%M:%S.%LZ

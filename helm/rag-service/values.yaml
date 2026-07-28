@@ -1,0 +1,44 @@
+replicaCount: 2
+
+image:
+  repository: ""  # Set to ECR repository URI
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: rag-service
+  annotations:
+    eks.amazonaws.com/role-arn: ""  # Set to IRSA role ARN
+
+service:
+  type: ClusterIP
+  port: 8002
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+env:
+  PGHOST: ""         # Aurora PostgreSQL cluster endpoint
+  PGPORT: "5432"
+  PGUSER: "rag_service"
+  PGPASSWORD: ""     # Use ExternalSecret or sealed secret in production
+  PGDATABASE: "ragdb"
+  EMBEDDING_SERVICE_URL: "http://embedding-service:8001"
+
+nodeSelector:
+  workload: cpu-workloads
+
+tolerations: []
+
+affinity: {}

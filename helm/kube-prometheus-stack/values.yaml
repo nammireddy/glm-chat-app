@@ -1,0 +1,187 @@
+# kube-prometheus-stack Helm chart values
+# Deployed into the monitoring namespace on system-od nodes
+
+namespaceOverride: monitoring
+
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: system-od
+    scrapeInterval: "60s"
+    evaluationInterval: "60s"
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 50Gi
+          storageClassName: gp3
+    additionalScrapeConfigs:
+      - job_name: chat-service
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            regex: chat-service
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: metrics
+            action: keep
+        scrape_interval: 60s
+
+      - job_name: rag-service
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            regex: rag-service
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: metrics
+            action: keep
+        scrape_interval: 60s
+
+      - job_name: vllm-inference
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - default
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            regex: vllm-inference
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: metrics
+            action: keep
+        scrape_interval: 60s
+
+      - job_name: dcgm-exporter
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - monitoring
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app]
+            regex: dcgm-exporter
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: metrics
+            action: keep
+        scrape_interval: 60s
+
+  # ServiceMonitor definitions
+  additionalServiceMonitors:
+    - name: chat-service-monitor
+      selector:
+        matchLabels:
+          app: chat-service
+      namespaceSelector:
+        matchNames:
+          - default
+      endpoints:
+        - port: metrics
+          interval: 60s
+          path: /metrics
+
+    - name: rag-service-monitor
+      selector:
+        matchLabels:
+          app: rag-service
+      namespaceSelector:
+        matchNames:
+          - default
+      endpoints:
+        - port: metrics
+          interval: 60s
+          path: /metrics
+
+    - name: vllm-inference-monitor
+      selector:
+        matchLabels:
+          app: vllm-inference
+      namespaceSelector:
+        matchNames:
+          - default
+      endpoints:
+        - port: metrics
+          interval: 60s
+          path: /metrics
+
+    - name: dcgm-exporter-monitor
+      selector:
+        matchLabels:
+          app: dcgm-exporter
+      namespaceSelector:
+        matchNames:
+          - monitoring
+      endpoints:
+        - port: metrics
+          interval: 60s
+          path: /metrics
+
+grafana:
+  enabled: true
+  nodeSelector:
+    eks.amazonaws.com/nodegroup: system-od
+  adminPassword: "${GRAFANA_ADMIN_PASSWORD}"
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: custom
+          orgId: 1
+          folder: GLM Chat
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/custom
+  dashboardsConfigMaps:
+    custom: grafana-dashboards
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: gp3
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: system-od
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname', 'namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: sns-notifications
+    receivers:
+      - name: sns-notifications
+        sns_configs:
+          - topic_arn: "${SNS_TOPIC_ARN}"
+            region: us-east-1
+            send_resolved: true
+
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  nodeSelector:
+    eks.amazonaws.com/nodegroup: system-od
+
+prometheusOperator:
+  nodeSelector:
+    eks.amazonaws.com/nodegroup: system-od

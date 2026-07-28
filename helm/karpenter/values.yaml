@@ -1,0 +1,18 @@
+# Karpenter Helm chart values for GLM Chat EKS cluster
+# Chart: oci://public.ecr.aws/karpenter/karpenter v1.1.0
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::<ACCOUNT_ID>:role/KarpenterControllerRole-glm-chat"
+
+replicas: 2
+
+nodeSelector:
+  node-group: system-od
+
+tolerations: []
+
+settings:
+  clusterName: glm-chat
+  clusterEndpoint: "https://<EKS_CLUSTER_ENDPOINT>"
+  interruptionQueue: "glm-chat-karpenter-interruption"

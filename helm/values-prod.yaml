@@ -1,0 +1,48 @@
+###############################################################################
+# Shared Production Values — GLM Chat Application
+#
+# Common production settings inherited by all service charts.
+# Per-service overrides live in helm/<service>/values-prod.yaml.
+###############################################################################
+
+global:
+  environment: production
+  region: us-east-1
+  project: glm-chat
+  namespace: glm-chat
+
+  # ECR registry prefix (set by deploy.sh via --set)
+  imageRegistry: ""  # e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/glm-chat
+
+  # Observability
+  prometheus:
+    scrape: "true"
+  logging:
+    format: json
+    level: INFO
+
+  # Pod disruption budgets
+  pdb:
+    enabled: true
+
+  # Resource defaults (overridden per-service)
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  # Node placement
+  nodeSelector:
+    karpenter.sh/nodepool: cpu-workloads
+
+  # Pod anti-affinity to spread across AZs
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/part-of: glm-chat

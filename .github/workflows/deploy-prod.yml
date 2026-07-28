@@ -1,0 +1,201 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag (git SHA) to deploy"
+        required: true
+        type: string
+      skip_approval:
+        description: "Skip manual approval (emergency only)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: ${{ secrets.PROD_EKS_CLUSTER_NAME }}
+  NAMESPACE: production
+  IMAGE_TAG: ${{ inputs.image_tag }}
+
+jobs:
+  approval:
+    name: "Manual Approval Gate"
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approval confirmed
+        run: echo "✓ Production deployment approved"
+
+  deploy:
+    name: "Deploy to Production"
+    runs-on: ubuntu-latest
+    needs: approval
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for production EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ env.EKS_CLUSTER_NAME }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Deploy inference-service
+        run: |
+          helm upgrade --install inference-service helm/inference-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/inference-service" \
+            -f helm/inference-service/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy embedding-service
+        run: |
+          helm upgrade --install embedding-service helm/embedding-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/embedding-service" \
+            -f helm/embedding-service/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy rag-service
+        run: |
+          helm upgrade --install rag-service helm/rag-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/rag-service" \
+            -f helm/rag-service/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy confidence-scorer
+        run: |
+          helm upgrade --install confidence-scorer helm/confidence-scorer \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/confidence-scorer" \
+            -f helm/confidence-scorer/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy chat-service
+        run: |
+          helm upgrade --install chat-service helm/chat-service \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/chat-service" \
+            -f helm/chat-service/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+      - name: Deploy frontend
+        run: |
+          helm upgrade --install frontend helm/frontend \
+            --namespace "${{ env.NAMESPACE }}" \
+            --set image.tag="${{ env.IMAGE_TAG }}" \
+            --set image.repository="${{ secrets.ECR_REGISTRY }}/frontend" \
+            -f helm/frontend/values-prod.yaml \
+            --atomic \
+            --timeout 10m
+
+  post-deploy-verification:
+    name: "Post-Deploy Verification"
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Query Prometheus for 5xx error rate
+        id: error-rate-check
+        run: |
+          ERROR_RATE=$(curl -s --fail \
+            -G "${{ secrets.PROD_PROMETHEUS_URL }}/api/v1/query" \
+            --data-urlencode 'query=rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])' \
+            -H "Authorization: Bearer ${{ secrets.PROMETHEUS_TOKEN }}" \
+            | jq -r '.data.result[0].value[1] // "0"')
+
+          echo "Current 5xx error rate: $ERROR_RATE"
+          echo "error_rate=$ERROR_RATE" >> "$GITHUB_OUTPUT"
+
+          # Fail if error rate >= 0.01 (1%)
+          if [ "$(echo "$ERROR_RATE >= 0.01" | bc -l)" = "1" ]; then
+            echo "::error::Post-deploy 5xx error rate ($ERROR_RATE) exceeds threshold (0.01)"
+            exit 1
+          fi
+
+          echo "✓ Error rate ($ERROR_RATE) is within acceptable threshold (<0.01)"
+
+  notify:
+    name: "Send Notifications"
+    runs-on: ubuntu-latest
+    needs: [deploy, post-deploy-verification]
+    if: always()
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Determine deployment status
+        id: status
+        run: |
+          if [ "${{ needs.deploy.result }}" = "success" ] && [ "${{ needs.post-deploy-verification.result }}" = "success" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "message=✅ Production deployment succeeded (tag: ${{ env.IMAGE_TAG }})" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            echo "message=❌ Production deployment FAILED (tag: ${{ env.IMAGE_TAG }}). Deploy: ${{ needs.deploy.result }}, Verification: ${{ needs.post-deploy-verification.result }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send Slack notification
+        if: secrets.SLACK_WEBHOOK_URL != ''
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "${{ steps.status.outputs.message }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ steps.status.outputs.message }}\n*Repository:* ${{ github.repository }}\n*Actor:* ${{ github.actor }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
+                  }
+                }
+              ]
+            }'
+
+      - name: Send SNS notification
+        run: |
+          aws sns publish \
+            --topic-arn "${{ secrets.DEPLOY_SNS_TOPIC_ARN }}" \
+            --subject "GLM Chat Production Deploy — ${{ steps.status.outputs.status }}" \
+            --message "${{ steps.status.outputs.message }}. Commit: ${{ env.IMAGE_TAG }}. Actor: ${{ github.actor }}. Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --region "${{ env.AWS_REGION }}"

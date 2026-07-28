@@ -1,0 +1,63 @@
+###############################################################################
+# Production Overrides — Confidence Scorer
+###############################################################################
+
+replicaCount: 3
+
+image:
+  # Set by deploy.sh: --set image.repository=<ECR_URL>
+  repository: ""
+  tag: ""  # Set by deploy.sh: --set image.tag=sha-<commit>
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8003
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "4Gi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8003
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8003
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+
+nodeSelector:
+  karpenter.sh/nodepool: cpu-workloads
+
+circuitBreaker:
+  enabled: true
+  annotation: "chat-service/circuit-breaker: confidence-scorer"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app: confidence-scorer
+          topologyKey: topology.kubernetes.io/zone
