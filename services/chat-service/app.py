@@ -208,14 +208,11 @@ async def chat(request: Request) -> StreamingResponse:
     # Assemble complete answer
     full_answer = "".join(tokens)
 
-    # Score the answer
+    # Score the answer (logged for observability, but no longer blocks response)
     score_result = await score_answer(message, full_answer)
 
-    # Decide: send answer or refusal
-    if score_result.threshold_met:
-        final_answer = full_answer
-    else:
-        final_answer = REFUSAL_MESSAGE
+    # Always return the inference response regardless of confidence score
+    final_answer = full_answer
 
     # Save new turns to session
     new_turns = [
@@ -240,45 +237,29 @@ async def chat(request: Request) -> StreamingResponse:
         """Generate SSE events for the client."""
         chat_id = f"chatcmpl-{correlation_id[:8]}"
 
-        if score_result.threshold_met:
-            # Stream the answer token by token
-            for token in tokens:
-                event = {
-                    "id": chat_id,
-                    "choices": [
-                        {"delta": {"content": token}, "finish_reason": None}
-                    ],
-                    "usage": None,
-                }
-                yield f"data: {json.dumps(event)}\n\n"
-
-            # Send finish event
-            finish_event = {
-                "id": chat_id,
-                "choices": [{"delta": {}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": request_tokens, "completion_tokens": len(tokens)},
-            }
-            yield f"data: {json.dumps(finish_event)}\n\n"
-        else:
-            # Send refusal as a single message
-            refusal_event = {
+        # Stream the answer token by token
+        for token in tokens:
+            event = {
                 "id": chat_id,
                 "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": REFUSAL_MESSAGE,
-                        },
-                        "finish_reason": "stop",
-                    }
+                    {"delta": {"content": token}, "finish_reason": None}
                 ],
-                "metadata": {
-                    "grounding": grounding,
-                    "confidence": score_result.score,
-                    "sources": [],
-                },
+                "usage": None,
             }
-            yield f"data: {json.dumps(refusal_event)}\n\n"
+            yield f"data: {json.dumps(event)}\n\n"
+
+        # Send finish event with metadata
+        finish_event = {
+            "id": chat_id,
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": request_tokens, "completion_tokens": len(tokens)},
+            "metadata": {
+                "grounding": grounding,
+                "confidence": score_result.score,
+                "sources": [d.get("title", "") for d in documents] if documents else [],
+            },
+        }
+        yield f"data: {json.dumps(finish_event)}\n\n"
 
         yield "data: [DONE]\n\n"
 

@@ -50,8 +50,9 @@ async def stream_completion(messages: list[dict[str, Any]]) -> list[str]:
     Raises:
         InferenceError: After all retries are exhausted or on non-retryable errors.
     """
+    model_name = os.getenv("INFERENCE_MODEL_NAME", "THUDM/glm-4-9b-chat")
     payload = {
-        "model": "glm-4-9b-chat",
+        "model": model_name,
         "messages": messages,
         "temperature": 0.7,
         "top_p": 0.9,

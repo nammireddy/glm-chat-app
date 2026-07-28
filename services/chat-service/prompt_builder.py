@@ -9,10 +9,16 @@ Assembles the final prompt list:
 
 from typing import Any
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer only from the provided context. "
-    "If the context does not contain enough information to answer, "
-    "say so clearly."
+SYSTEM_PROMPT_WITH_CONTEXT = (
+    "You are a helpful assistant. Answer using the provided context when available. "
+    "If the context contains relevant information, prioritize it in your answer "
+    "and cite the source."
+)
+
+SYSTEM_PROMPT_NO_CONTEXT = (
+    "You are a helpful assistant. No specific context documents were found for this query. "
+    "Answer from your general knowledge. Be helpful, accurate, and concise. "
+    "If you're unsure about something, say so."
 )
 
 MAX_HISTORY_TURNS = 20
@@ -35,8 +41,11 @@ def build_prompt(
     """
     messages: list[dict[str, str]] = []
 
-    # 1. System prompt
-    messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    # 1. System prompt — different depending on whether we have RAG context
+    if documents:
+        messages.append({"role": "system", "content": SYSTEM_PROMPT_WITH_CONTEXT})
+    else:
+        messages.append({"role": "system", "content": SYSTEM_PROMPT_NO_CONTEXT})
 
     # 2. Retrieved document chunks as context
     if documents:

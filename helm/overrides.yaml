@@ -1,0 +1,4 @@
+nodeSelector: {}
+affinity: {}
+tolerations: []
+replicaCount: 1

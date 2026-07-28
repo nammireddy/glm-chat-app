@@ -28,8 +28,26 @@ CANNED_RESPONSES = [
 _response_index = 0
 
 
-def get_next_response() -> str:
-    """Cycle through canned responses."""
+def get_next_response(messages: list = None) -> str:
+    """Generate a response based on the user's message, or cycle through defaults."""
+    if messages:
+        # Find the last user message
+        user_msg = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and not m.get("content", "").startswith("Context:"):
+                user_msg = m.get("content", "").strip()
+                break
+
+        if user_msg:
+            # Generate a simple helpful response based on the question
+            return (
+                f"Here's what I know about your question: \"{user_msg[:100]}\" — "
+                f"This is a mock response for local development. In production, "
+                f"the GLM-4 model would provide a detailed, contextual answer. "
+                f"The chat pipeline is working correctly: your message was received, "
+                f"processed through the RAG pipeline, and routed to the inference service."
+            )
+
     global _response_index
     response = CANNED_RESPONSES[_response_index % len(CANNED_RESPONSES)]
     _response_index += 1
@@ -109,7 +127,7 @@ async def chat_completions(request: Request):
             content={"error": {"message": f"max_tokens must be between 1 and 8192, got {max_tokens}", "type": "invalid_request_error"}},
         )
 
-    response_text = get_next_response()
+    response_text = get_next_response(body.get("messages", []))
 
     if stream:
         return StreamingResponse(
