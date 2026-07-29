@@ -35,7 +35,10 @@ class InferenceError(Exception):
         super().__init__(f"Inference failed: status={status_code}, {message}")
 
 
-async def stream_completion(messages: list[dict[str, Any]]) -> list[str]:
+async def stream_completion(
+    messages: list[dict[str, Any]],
+    model_config: dict[str, Any] | None = None,
+) -> list[str]:
     """Stream chat completion from vLLM and return collected tokens.
 
     Sends the request with stream=true, collects all tokens from the SSE stream,
@@ -43,6 +46,8 @@ async def stream_completion(messages: list[dict[str, Any]]) -> list[str]:
 
     Args:
         messages: The assembled prompt messages list.
+        model_config: Optional model configuration from the router.
+            Keys: name (model name), url (service URL), max_tokens.
 
     Returns:
         List of token strings from the streamed response.
@@ -50,13 +55,21 @@ async def stream_completion(messages: list[dict[str, Any]]) -> list[str]:
     Raises:
         InferenceError: After all retries are exhausted or on non-retryable errors.
     """
-    model_name = os.getenv("INFERENCE_MODEL_NAME", "THUDM/glm-4-9b-chat")
+    if model_config:
+        model_name = model_config["name"]
+        service_url = model_config["url"]
+        max_tokens = model_config.get("max_tokens", 1024)
+    else:
+        model_name = os.getenv("INFERENCE_MODEL_NAME", "THUDM/glm-4-9b-chat")
+        service_url = INFERENCE_SERVICE_URL
+        max_tokens = 1024
+
     payload = {
         "model": model_name,
         "messages": messages,
         "temperature": 0.7,
         "top_p": 0.9,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "stream": True,
     }
 
@@ -77,7 +90,7 @@ async def stream_completion(messages: list[dict[str, Any]]) -> list[str]:
             async with httpx.AsyncClient(timeout=INFERENCE_TIMEOUT) as client:
                 async with client.stream(
                     "POST",
-                    f"{INFERENCE_SERVICE_URL}/v1/chat/completions",
+                    f"{service_url}/v1/chat/completions",
                     json=payload,
                 ) as response:
                     if response.status_code >= 500:

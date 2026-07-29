@@ -28,6 +28,7 @@ from slowapi.errors import RateLimitExceeded
 
 from cookie import get_session_id, set_session_cookie
 from inference_client import InferenceError, stream_completion
+from model_router import get_available_models, select_model
 from prompt_builder import build_prompt
 from rag_client import retrieve_documents
 from rate_limit import RATE_LIMIT, limiter, rate_limit_exceeded_handler
@@ -136,6 +137,7 @@ async def chat(request: Request) -> StreamingResponse:
         )
 
     message = body.get("message", "")
+    explicit_model = body.get("model")  # Optional: user can specify "glm-4" or "qwen3"
 
     # Validate: non-empty after trimming
     if not message or not message.strip():
@@ -180,12 +182,15 @@ async def chat(request: Request) -> StreamingResponse:
     # Build prompt (last 20 turns for prompt context)
     prompt_messages = build_prompt(documents, history, message)
 
+    # Select model based on message content or explicit choice
+    model_config = select_model(message, explicit_model)
+
     # Count request tokens (approximate: character-based estimate)
     request_tokens = sum(len(m.get("content", "")) for m in prompt_messages) // 4
 
     # Stream from inference service (buffer internally)
     try:
-        tokens = await stream_completion(prompt_messages)
+        tokens = await stream_completion(prompt_messages, model_config=model_config)
     except InferenceError as e:
         latency_ms = (time.monotonic() - start_time) * 1000
         _structured_log(
@@ -256,6 +261,7 @@ async def chat(request: Request) -> StreamingResponse:
             "metadata": {
                 "grounding": grounding,
                 "confidence": score_result.score,
+                "model": model_config["name"],
                 "sources": [d.get("title", "") for d in documents] if documents else [],
             },
         }
@@ -320,4 +326,13 @@ async def ready() -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"status": "ready" if all_ready else "not_ready", "checks": checks},
+    )
+
+
+@app.get("/models")
+async def models() -> JSONResponse:
+    """List available models and their routing descriptions."""
+    return JSONResponse(
+        status_code=200,
+        content={"models": get_available_models()},
     )
