@@ -59,10 +59,12 @@ async def stream_completion(
         model_name = model_config["name"]
         service_url = model_config["url"]
         max_tokens = model_config.get("max_tokens", 1024)
+        api_key = model_config.get("api_key", "")
     else:
         model_name = os.getenv("INFERENCE_MODEL_NAME", "THUDM/glm-4-9b-chat")
         service_url = INFERENCE_SERVICE_URL
         max_tokens = 1024
+        api_key = ""
 
     payload = {
         "model": model_name,
@@ -72,6 +74,10 @@ async def stream_completion(
         "max_tokens": max_tokens,
         "stream": True,
     }
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     budget_start = time.monotonic()
 
@@ -92,6 +98,7 @@ async def stream_completion(
                     "POST",
                     f"{service_url}/v1/chat/completions",
                     json=payload,
+                    headers=headers,
                 ) as response:
                     if response.status_code >= 500:
                         if response.status_code in NON_RETRYABLE_5XX:

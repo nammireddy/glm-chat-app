@@ -1,73 +1,62 @@
-"""Model Router — routes chat requests to the appropriate LLM.
+"""Model Router — routes chat requests via LiteLLM's complexity router.
 
-Routing logic:
-- GLM-4-9B: General chat, Chinese language, lightweight queries
-- Qwen3-27B: Complex reasoning, coding, math, analysis, long-form answers
+LiteLLM handles the intelligent routing internally using its built-in
+complexity scorer. The chat-service just needs to call the smart-router
+model alias and LiteLLM will classify the request and pick the right backend.
 
-The user can also explicitly select a model via the request body.
+Users can also explicitly select a model via the request body.
 """
 
 import logging
 import os
-import re
 
 logger = logging.getLogger(__name__)
 
+LITELLM_URL = os.getenv("LITELLM_URL", "http://litellm-proxy:4000")
+LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "sk-glmchat-litellm-internal")
+
 # Model configurations
 MODELS = {
+    "smart-router": {
+        "name": "smart-router",
+        "url": LITELLM_URL,
+        "description": "Auto-routes to the best model based on request complexity",
+        "max_tokens": 2048,
+        "api_key": LITELLM_API_KEY,
+    },
     "glm-4": {
-        "name": "THUDM/glm-4-9b-chat",
-        "url": os.getenv("INFERENCE_SERVICE_URL", "http://inference-service:8000"),
-        "description": "Fast general chat, Chinese language support",
+        "name": "glm-4",
+        "url": LITELLM_URL,
+        "description": "Fast general chat, Chinese language support (GLM-4-9B)",
         "max_tokens": 1024,
+        "api_key": LITELLM_API_KEY,
     },
     "qwen3": {
-        "name": "Qwen/Qwen2.5-14B-Instruct-AWQ",
-        "url": os.getenv("QWEN3_SERVICE_URL", "http://qwen3-service:8000"),
+        "name": "qwen2.5-14b",
+        "url": LITELLM_URL,
         "description": "Complex reasoning, coding, math, analysis (Qwen2.5-14B)",
         "max_tokens": 2048,
+        "api_key": LITELLM_API_KEY,
     },
 }
 
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "glm-4")
-
-# Keywords/patterns that suggest routing to Qwen3 (the stronger model)
-COMPLEX_PATTERNS = [
-    # Coding
-    r"\b(code|program|function|class|algorithm|debug|refactor|implement)\b",
-    r"\b(python|javascript|typescript|java|rust|go|sql|html|css)\b",
-    r"\b(api|endpoint|database|query|schema|migration)\b",
-    # Math & reasoning
-    r"\b(calculate|solve|prove|equation|formula|derivative|integral)\b",
-    r"\b(math|statistics|probability|linear algebra)\b",
-    # Analysis & complex tasks
-    r"\b(analyze|compare|contrast|evaluate|critique|review)\b",
-    r"\b(explain in detail|step by step|thoroughly|comprehensive)\b",
-    r"\b(architecture|design pattern|system design|tradeoff)\b",
-    # Long-form
-    r"\b(essay|article|report|summary|outline|plan)\b",
-    r"\b(write me a|create a detailed|give me a complete)\b",
-]
-
-# Keywords that suggest sticking with GLM-4 (lighter model)
-SIMPLE_PATTERNS = [
-    r"\b(hello|hi|hey|thanks|thank you|bye|goodbye)\b",
-    r"\b(what is|who is|when was|where is|how old)\b",
-    r"\b(translate|翻译|中文|chinese)\b",
-]
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "smart-router")
 
 
 def select_model(message: str, explicit_model: str | None = None) -> dict:
-    """Select which model to route to based on the message content.
+    """Select which model to route to.
+
+    If the user explicitly selects a model, use it directly.
+    Otherwise, use the smart-router which delegates routing to LiteLLM's
+    complexity scorer (keyword matching + heuristic scoring).
 
     Args:
         message: The user's chat message.
         explicit_model: Optional explicit model selection from the request.
 
     Returns:
-        Model configuration dict with name, url, description, max_tokens.
+        Model configuration dict with name, url, description, max_tokens, api_key.
     """
-    # If user explicitly selected a model, use it
     if explicit_model:
         model_key = explicit_model.lower().strip()
         if model_key in MODELS:
@@ -79,30 +68,8 @@ def select_model(message: str, explicit_model: str | None = None) -> dict:
                 logger.info(f"Partial model match: {model_key} -> {key}")
                 return MODELS[key]
 
-    # Check if message matches complex patterns (route to Qwen3)
-    message_lower = message.lower()
-
-    # Check for simple/greeting patterns first
-    for pattern in SIMPLE_PATTERNS:
-        if re.search(pattern, message_lower):
-            # Short simple messages stay on GLM-4
-            if len(message) < 100:
-                logger.info("Routed to glm-4 (simple query)")
-                return MODELS["glm-4"]
-
-    # Check for complex patterns
-    complex_score = 0
-    for pattern in COMPLEX_PATTERNS:
-        if re.search(pattern, message_lower):
-            complex_score += 1
-
-    # Route to Qwen3 if message is complex (2+ pattern matches or long message)
-    if complex_score >= 2 or (complex_score >= 1 and len(message) > 200):
-        logger.info(f"Routed to qwen3 (complexity score: {complex_score})")
-        return MODELS["qwen3"]
-
-    # Default model
-    logger.info(f"Routed to {DEFAULT_MODEL} (default)")
+    # Default: use smart-router (LiteLLM handles complexity-based routing)
+    logger.info(f"Using {DEFAULT_MODEL} (LiteLLM auto-routing)")
     return MODELS[DEFAULT_MODEL]
 
 
